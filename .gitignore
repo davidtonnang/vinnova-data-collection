@@ -3,6 +3,8 @@ config.py
 
 # Output files
 *.json
+*.xlsx
+*.xls
 
 # Python
 __pycache__/
