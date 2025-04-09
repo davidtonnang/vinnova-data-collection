@@ -215,6 +215,62 @@ def extract_project_data(text):
     
     return data
 
+def extract_project_partners(text):
+    """
+    Extract project partners from text and return them as a list
+    """
+    if not text:
+        return []
+    
+    st.write(f"Debug - Original text: {text[:100]}...")
+    
+    # Standardize the text by replacing different bullet points with a consistent separator
+    standardized_text = text
+    for bullet in ['●', '•', '-', '*']:
+        standardized_text = standardized_text.replace(bullet, '|')
+    
+    st.write(f"Debug - Standardized text: {standardized_text[:100]}...")
+    
+    # Split by newlines and process each line
+    lines = standardized_text.split('\n')
+    partners = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # If line contains a separator, split by it
+        if '|' in line:
+            parts = [part.strip() for part in line.split('|') if part.strip()]
+            partners.extend(parts)
+            st.write(f"Debug - Split by separator: {parts}")
+        # If line contains commas, split by them
+        elif ',' in line:
+            parts = [part.strip() for part in line.split(',') if part.strip()]
+            partners.extend(parts)
+            st.write(f"Debug - Split by comma: {parts}")
+        # Otherwise, treat the whole line as a partner
+        else:
+            partners.append(line)
+            st.write(f"Debug - Added as single partner: {line}")
+    
+    # Clean up partners (remove any remaining separators, etc.)
+    cleaned_partners = []
+    for partner in partners:
+        # Remove any remaining separators
+        for sep in ['|', ',', ';']:
+            partner = partner.replace(sep, '')
+        
+        # Clean up whitespace
+        partner = ' '.join(partner.split())
+        
+        if partner:
+            cleaned_partners.append(partner)
+    
+    st.write(f"Debug - Final partners: {cleaned_partners}")
+    return cleaned_partners
+
 def convert_pdf_to_excel(pdf_file):
     """
     Convert PDF file to Excel format with enhanced extraction
@@ -241,6 +297,19 @@ def convert_pdf_to_excel(pdf_file):
                 # Extract project data from text
                 project_data = extract_project_data(text)
                 
+                # Debug output for Övriga projektparter
+                st.write(f"Debug - Övriga projektparter: {project_data['Övriga projektparter'][:100]}...")
+                
+                # Extract project partners
+                partners = extract_project_partners(project_data["Övriga projektparter"])
+                
+                # Add partners as separate columns
+                for i, partner in enumerate(partners, 1):
+                    project_data[f"Projektpart {i}"] = partner
+                
+                # Debug output for project data
+                st.write(f"Debug - Project data keys: {list(project_data.keys())}")
+                
                 # Debug information for empty sections
                 empty_sections = [key for key, value in project_data.items() if not value.strip()]
                 if empty_sections:
@@ -252,6 +321,7 @@ def convert_pdf_to_excel(pdf_file):
                     st.write(f"Project title found on page {page_num}: {project_data['Projektets titel'][:100]}...")
                     st.write(f"Mål för projektet length: {len(project_data['Mål för projektet'])}")
                     st.write(f"Sammanfattning length: {len(project_data['Sammanfattning'])}")
+                    st.write(f"Number of project partners: {len(partners)}")
                     
                     # Print a sample of the Sammanfattning content for debugging
                     if project_data['Sammanfattning']:
@@ -268,6 +338,30 @@ def convert_pdf_to_excel(pdf_file):
             # Create DataFrame from all projects
             df = pd.DataFrame(all_projects)
             st.write(f"Found {len(df)} projects")
+            st.write(f"Debug - DataFrame columns: {list(df.columns)}")
+            
+            # Ensure all projects have the same columns (fill missing partner columns with empty strings)
+            partner_columns = [col for col in df.columns if col.startswith("Projektpart")]
+            st.write(f"Debug - Partner columns: {partner_columns}")
+            
+            max_partners = max([int(col.split()[-1]) for col in partner_columns]) if partner_columns else 0
+            st.write(f"Debug - Max partners: {max_partners}")
+            
+            for i in range(1, max_partners + 1):
+                col_name = f"Projektpart {i}"
+                if col_name not in df.columns:
+                    df[col_name] = ""
+            
+            # Reorder columns to keep partner columns together
+            base_columns = [col for col in df.columns if not col.startswith("Projektpart")]
+            partner_columns = [f"Projektpart {i}" for i in range(1, max_partners + 1)]
+            df = df[base_columns + partner_columns]
+            
+            st.write(f"Debug - Final DataFrame columns: {list(df.columns)}")
+            
+            # Display the DataFrame to verify the columns
+            st.write("Debug - DataFrame preview:")
+            st.dataframe(df.head())
             
             return df
             
@@ -296,9 +390,14 @@ def main():
                 df = convert_pdf_to_excel(uploaded_file)
                 
                 if df is not None:
+                    # Display the DataFrame to verify the columns
+                    st.write("DataFrame preview:")
+                    st.dataframe(df)
+                    
                     # Create Excel file in memory
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        # Write the DataFrame to Excel
                         df.to_excel(writer, index=False, sheet_name='Projects')
                         
                         # Auto-adjust column widths
@@ -320,10 +419,6 @@ def main():
                         file_name=f"{uploaded_file.name.replace('.pdf', '')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-                    
-                    # Display preview of the data
-                    st.write("Preview of the data:")
-                    st.dataframe(df)
                     
                     # Display some statistics
                     st.write("Data Statistics:")

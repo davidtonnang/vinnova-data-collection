@@ -71,15 +71,91 @@ def extract_section(text, start_pattern, end_pattern):
                 content = text[start_pos:end_match.start()].strip()
                 break
         
-        if not content and end_matches:
-            # If we didn't find an end match after our start, something might be wrong
-            st.write(f"Debug - Possible section overlap. Start pos: {start_pos}, End matches: {[m.start() for m in end_matches]}")
-            
         return content
         
     except Exception as e:
-        st.warning(f"Error in extract_section: {str(e)}")
         return ""
+
+def convert_bullets_to_numbers(text):
+    """
+    Convert bullet points to numbered list by directly replacing bullet points with numbers
+    """
+    if not text:
+        return text
+        
+    # Split into lines
+    lines = text.split('\n')
+    
+    # Check if we have any bullet points
+    if not any(any(line.strip().startswith(bullet) for bullet in ['●', '•', '-', '*']) for line in lines):
+        return text
+    
+    # Convert bullet points to numbers
+    numbered_lines = []
+    counter = 1
+    
+    for line in lines:
+        stripped_line = line.strip()
+        # Check if line starts with a bullet point
+        if any(stripped_line.startswith(bullet) for bullet in ['●', '•', '-', '*']):
+            # Remove the bullet point and add number
+            for bullet in ['●', '•', '-', '*']:
+                stripped_line = stripped_line.replace(bullet, '').strip()
+            numbered_lines.append(f"{counter}. {stripped_line}")
+            counter += 1
+        else:
+            # Keep non-bullet point lines as is
+            numbered_lines.append(line)
+    
+    return '\n'.join(numbered_lines)
+
+def extract_project_partners(text):
+    """
+    Extract project partners from text and return them as a list
+    """
+    if not text:
+        return []
+    
+    # Standardize the text by replacing different bullet points with a consistent separator
+    standardized_text = text
+    for bullet in ['●', '•', '-', '*']:
+        standardized_text = standardized_text.replace(bullet, '|')
+    
+    # Split by newlines and process each line
+    lines = standardized_text.split('\n')
+    partners = []
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # If line contains a separator, split by it
+        if '|' in line:
+            parts = [part.strip() for part in line.split('|') if part.strip()]
+            partners.extend(parts)
+        # If line contains commas, split by them
+        elif ',' in line:
+            parts = [part.strip() for part in line.split(',') if part.strip()]
+            partners.extend(parts)
+        # Otherwise, treat the whole line as a partner
+        else:
+            partners.append(line)
+    
+    # Clean up partners (remove any remaining separators, etc.)
+    cleaned_partners = []
+    for partner in partners:
+        # Remove any remaining separators
+        for sep in ['|', ',', ';']:
+            partner = partner.replace(sep, '')
+        
+        # Clean up whitespace
+        partner = ' '.join(partner.split())
+        
+        if partner:
+            cleaned_partners.append(partner)
+    
+    return cleaned_partners
 
 def extract_project_data(text):
     """
@@ -144,12 +220,6 @@ def extract_project_data(text):
         
         content = extract_section(text, start_pattern, end_pattern)
         
-        # Debug output
-        st.write(f"Debug - Section: {section}")
-        st.write(f"Debug - Content length: {len(content)}")
-        if content:
-            st.write(f"Debug - First 50 chars: {content[:50]}")
-        
         if content.strip():
             # Clean the content
             lines = content.split('\n')
@@ -158,7 +228,14 @@ def extract_project_data(text):
                 cleaned_line = re.sub(r'\s+', ' ', line).strip()
                 if cleaned_line:
                     cleaned_lines.append(cleaned_line)
-            data[section] = '\n'.join(cleaned_lines)
+            
+            # Convert bullet points to numbers for both Mål för projektet and Sammanfattning sections
+            if section in ["Mål för projektet", "Sammanfattning"]:
+                content = convert_bullets_to_numbers('\n'.join(cleaned_lines))
+            else:
+                content = '\n'.join(cleaned_lines)
+                
+            data[section] = content
     
     # Extract budget information using specific patterns
     budget_patterns = [
@@ -182,15 +259,11 @@ def convert_pdf_to_excel(pdf_file):
     try:
         # Read PDF file
         with pdfplumber.open(pdf_file) as pdf:
-            st.write(f"Total pages in PDF: {len(pdf.pages)}")
-            
             # Store all project data
             all_projects = []
             
             # Process each page
             for page_num, page in enumerate(pdf.pages, 1):
-                st.write(f"Processing page {page_num}...")
-                
                 # Extract text from page
                 text = page.extract_text()
                 
@@ -201,25 +274,16 @@ def convert_pdf_to_excel(pdf_file):
                 # Extract project data from text
                 project_data = extract_project_data(text)
                 
-                # Debug information for empty sections
-                empty_sections = [key for key, value in project_data.items() if not value.strip()]
-                if empty_sections:
-                    st.warning(f"Empty sections on page {page_num}: {', '.join(empty_sections)}")
+                # Extract project partners
+                partners = extract_project_partners(project_data["Övriga projektparter"])
+                
+                # Add partners as separate columns
+                for i, partner in enumerate(partners, 1):
+                    project_data[f"Projektpart {i}"] = partner
                 
                 # Only add projects that have at least some data
                 if any(value.strip() for value in project_data.values()):
-                    # Debug information
-                    st.write(f"Project title found on page {page_num}: {project_data['Projektets titel'][:100]}...")
-                    st.write(f"Mål för projektet length: {len(project_data['Mål för projektet'])}")
-                    st.write(f"Sammanfattning length: {len(project_data['Sammanfattning'])}")
-                    
-                    # Print a sample of the Sammanfattning content for debugging
-                    if project_data['Sammanfattning']:
-                        st.write(f"Sammanfattning sample: {project_data['Sammanfattning'][:100]}...")
-                    
                     all_projects.append(project_data)
-                else:
-                    st.warning(f"No data could be extracted from page {page_num}")
                 
             if not all_projects:
                 st.error("No project data found in the PDF file.")
@@ -227,13 +291,25 @@ def convert_pdf_to_excel(pdf_file):
             
             # Create DataFrame from all projects
             df = pd.DataFrame(all_projects)
-            st.write(f"Found {len(df)} projects")
+            
+            # Ensure all projects have the same columns (fill missing partner columns with empty strings)
+            partner_columns = [col for col in df.columns if col.startswith("Projektpart")]
+            max_partners = max([int(col.split()[-1]) for col in partner_columns]) if partner_columns else 0
+            
+            for i in range(1, max_partners + 1):
+                col_name = f"Projektpart {i}"
+                if col_name not in df.columns:
+                    df[col_name] = ""
+            
+            # Reorder columns to keep partner columns together
+            base_columns = [col for col in df.columns if not col.startswith("Projektpart")]
+            partner_columns = [f"Projektpart {i}" for i in range(1, max_partners + 1)]
+            df = df[base_columns + partner_columns]
             
             return df
             
     except Exception as e:
         st.error(f"Error processing PDF: {str(e)}")
-        st.exception(e)
         return None
 
 def main():
@@ -259,6 +335,7 @@ def main():
                     # Create Excel file in memory
                     output = io.BytesIO()
                     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                        # Write the DataFrame to Excel
                         df.to_excel(writer, index=False, sheet_name='Projects')
                         
                         # Auto-adjust column widths
@@ -280,10 +357,6 @@ def main():
                         file_name=f"{uploaded_file.name.replace('.pdf', '')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
-                    
-                    # Display preview of the data
-                    st.write("Preview of the data:")
-                    st.dataframe(df)
                     
                     # Display some statistics
                     st.write("Data Statistics:")
